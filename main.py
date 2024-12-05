@@ -202,6 +202,12 @@ class VideoImageProcessor:
                                              text_color="white", font=("Trebuchet MS", 12, "bold"))
         button_mark_cutpoint.grid(row=2, column=1, padx=5, pady=5)
 
+        # ---- Salvar os segmentos marcados ----
+        button_save_fragments = ctk.CTkButton(video_frame, text="Salvar Cortes", command=self.save_video_segments, 
+                                             corner_radius=8, width=70, height=20, fg_color="#585858", 
+                                             text_color="white", font=("Trebuchet MS", 12, "bold"))
+        button_save_fragments.grid(row=2, column=2, padx=5, pady=5)
+
      
     # Funções controle da janela
     def window_resize(self, event: tk.Event):
