@@ -1,12 +1,11 @@
 import tkinter as tk
 import customtkinter as ctk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
 import os
 from datetime import timedelta
-from threading import Timer
 
 class VideoImageProcessor:
     def __init__(self, root: ctk.CTk):
@@ -46,7 +45,21 @@ class VideoImageProcessor:
         
         # Área de visualização
         self.canvas = ctk.CTkCanvas(self.main_frame, width=800, height=600, bg="black", highlightthickness=0)
-        self.canvas.grid(row=1, column=0, columnspan=2, pady=10, padx=10)
+        self.canvas.grid(row=1, column=0, columnspan=1, pady=10, padx=10)
+
+        # Área do ROI
+        roi_frame = ctk.CTkFrame(self.main_frame, fg_color="#444444", corner_radius=5)
+        roi_frame.grid(row=1, column=1, columnspan=1, pady=10, padx=10)
+
+        # Área de visualização do ROI
+        self.roi_canvas = ctk.CTkCanvas(roi_frame, width=400, height=300, bg="black", highlightthickness=0)
+        self.roi_canvas.grid(row=0, column=0, columnspan=1, pady=10, padx=10)
+        
+        # Botão para salvar o ROI
+        button_save_roi = ctk.CTkButton(roi_frame, text="Salvar ROI", command=self.save_roi, corner_radius=8, 
+                                         width=70, height=20, fg_color="#585858", text_color="white", 
+                                         font=("Trebuchet MS", 12, "bold"))
+        button_save_roi.grid(row=1, column=0, padx=16, pady=8, sticky="w")  # Adiciona um maior espaçamento entre os widgets
         
         # Controles de filtros e operações
         self.setup_filter_controls()
@@ -67,7 +80,7 @@ class VideoImageProcessor:
         controls_frame = ctk.CTkFrame(self.main_frame, fg_color="#444444", corner_radius=5)
 
         self.main_frame.grid_columnconfigure(0, weight=1)
-        self.main_frame.grid_rowconfigure(0, weight=1)
+        self.main_frame.grid_rowconfigure(0, weight=1, minsize=120)
 
         controls_frame.grid(row=0, column=0, columnspan=2, pady=10, padx=10, sticky="new")
         controls_frame.grid_columnconfigure((0, 1, 2, 3, 4, 5, 6), weight=1)
@@ -79,7 +92,7 @@ class VideoImageProcessor:
         button_open_file.grid(row=0, column=0, padx=16, pady=8, sticky="w")  # Adiciona um maior espaçamento entre os widgets
         
         # ---- Título e Seleção de Modo ----
-        label_mode = ctk.CTkLabel(controls_frame, text="Modo:", text_color="white", font=("Trebuchet MS", 12, "bold"))
+        label_mode = ctk.CTkLabel(controls_frame, text="Tipo:", text_color="white", font=("Trebuchet MS", 12, "bold"))
         label_mode.grid(row=0, column=1, padx=16, sticky="e")  # Alinha o título à esquerda com espaçamento
         
         # Variável para armazenar o modo selecionado
@@ -93,10 +106,25 @@ class VideoImageProcessor:
         radiobutton_video = ctk.CTkRadioButton(controls_frame, text="Vídeo", variable=self.mode_var, value="video", 
                                                font=("Trebuchet MS", 12, "bold"), command=self.mode_changed)
         radiobutton_video.grid(row=0, column=3, sticky="w")
+
+        # ---- Seleção para extrair ROI ou aplicar Zoom ----
+        label_mode = ctk.CTkLabel(controls_frame, text="Abrir ROI:", text_color="white", font=("Trebuchet MS", 12, "bold"))
+        label_mode.grid(row=0, column=4, padx=16, sticky="e")  # Alinha o título à esquerda com espaçamento
+
+        self.roi_zoom_var = tk.StringVar(value="roi")
+
+        # RadioButtons para seleção do modo de imagem ou vídeo
+        radiobutton_image = ctk.CTkRadioButton(controls_frame, text="ROI", variable=self.roi_zoom_var, value="roi", 
+                                               font=("Trebuchet MS", 12, "bold"))
+        radiobutton_image.grid(row=0, column=5, sticky="w")
+        
+        radiobutton_video = ctk.CTkRadioButton(controls_frame, text="Zoom", variable=self.roi_zoom_var, value="zoom", 
+                                               font=("Trebuchet MS", 12, "bold"))
+        radiobutton_video.grid(row=0, column=6, sticky="w")
         
         # ---- Modo de Processamento ----
         label_process_mode = ctk.CTkLabel(controls_frame, text="Processamento:", text_color="white", font=("Trebuchet MS", 12, "bold"))
-        label_process_mode.grid(row=0, column=4, padx=24, sticky="e")
+        label_process_mode.grid(row=1, column=1, padx=24, sticky="e")
         
         # Variável para armazenar o modo de processamento selecionado
         self.processing_mode = tk.StringVar(value="independent")
@@ -105,11 +133,11 @@ class VideoImageProcessor:
         radiobutton_independent = ctk.CTkRadioButton(controls_frame, text="Independente", height=10, width=10, 
                                                      variable=self.processing_mode, value="independent", 
                                                      text_color="white", font=("Trebuchet MS", 12, "bold"))
-        radiobutton_independent.grid(row=0, column=5, sticky="w")
+        radiobutton_independent.grid(row=1, column=2, sticky="w")
         
         radiobutton_cascade = ctk.CTkRadioButton(controls_frame, text="Cascata", variable=self.processing_mode, 
                                                  value="cascade", text_color="white", font=("Trebuchet MS", 12, "bold"))
-        radiobutton_cascade.grid(row=0, column=6, sticky="w")
+        radiobutton_cascade.grid(row=1, column=3, sticky="w")
     
     # Método para configurar os controles de filtros
     def setup_filter_controls(self):
@@ -147,22 +175,27 @@ class VideoImageProcessor:
                                      width=70, height=20, fg_color="#585858", text_color="white", 
                                      font=("Trebuchet MS", 12, "bold"))
         button_Canny.grid(row=2, column=0, padx=5, pady=5)
+
+        button_binary = ctk.CTkButton(filter_frame, text="Sobel", command=self.apply_sobel, corner_radius=8, 
+                                      width=70, height=20, fg_color="#585858", text_color="white", 
+                                      font=("Trebuchet MS", 12, "bold"))
+        button_binary.grid(row=2, column=1, padx=5, pady=5)
         
         # ---- Controles de Cor ----
         button_grayscale = ctk.CTkButton(filter_frame, text="Cinza", command=self.convert_grayscale, corner_radius=8, 
                                          width=70, height=20, fg_color="#585858", text_color="white", 
                                          font=("Trebuchet MS", 12, "bold"))
-        button_grayscale.grid(row=2, column=1, padx=5, pady=5)
+        button_grayscale.grid(row=2, column=2, padx=5, pady=5)
         
         button_binary = ctk.CTkButton(filter_frame, text="Binário", command=self.convert_binary, corner_radius=8, 
                                       width=70, height=20, fg_color="#585858", text_color="white", 
                                       font=("Trebuchet MS", 12, "bold"))
-        button_binary.grid(row=2, column=2, padx=5, pady=5)
+        button_binary.grid(row=2, column=3, padx=5, pady=5)
         
         button_color = ctk.CTkButton(filter_frame, text="Colorido", command=self.restore_color, corner_radius=8, 
                                      width=70, height=20, fg_color="#585858", text_color="white", 
                                      font=("Trebuchet MS", 12, "bold"))
-        button_color.grid(row=2, column=3, padx=5, pady=5)
+        button_color.grid(row=3, column=0, padx=5, pady=5)
     
     # Método para configurar os controles de vídeo
     def setup_video_controls(self):
@@ -234,19 +267,23 @@ class VideoImageProcessor:
                                              text_color="white", font=("Trebuchet MS", 12, "bold"))
         button_more_zoom.grid(row=3, column=1, columnspan=1, padx=5, pady=5)        
      
-    # Funções controle da janela
+    # Função de controle do tamanho da janela
     def window_resize(self, event: tk.Event):
-        if event.widget.winfo_class() == "Canvas":
-            self.canvas.configure(width=self.root.winfo_width() - 120, height=self.root.winfo_height() - 320)
+        if self.root.winfo_height() < 900:
+            self.canvas.configure(height=self.root.winfo_height() - 380)
             self.show_frame()              
     
+    # Função de controle da troca de modo (vídeo ou imagem)
     def mode_changed(self):
         if self.cap is not None:
             self.cap.release()
             self.cap = None
         self.current_frame = None
+        self.original_frame = None
+        self.is_paused = False
         self.canvas.delete("all")
     
+    # Funções de abertura de arquivo (geral)
     def open_file(self):
         if self.mode_var.get() == "image":
             filetypes = [("Image files", "*.png *.jpg *.jpeg *.bmp *.gif")]
@@ -261,6 +298,7 @@ class VideoImageProcessor:
             else:
                 self.open_image()
     
+    # Funções de abertura de imagem
     def open_image(self):
         try:
             self.current_frame = cv2.imread(self.current_file)
@@ -276,10 +314,12 @@ class VideoImageProcessor:
             print(f"Erro ao tentar carregar ou processar a imagem: {e}")
             self.original_frame = None
     
+    # Funções de abertura de vídeo
     def open_video(self):
         self.cap = cv2.VideoCapture(self.current_file)
         self.update_video_frame()
 
+    # Funções de aplicação de filtro em vídeo
     def apply_filters_on_video(self):
         for filter in self.video_filters:
             if filter == 'blur':
@@ -299,6 +339,13 @@ class VideoImageProcessor:
             if filter == 'canny':
                 self.current_frame = cv2.Canny(self.current_frame, 100, 200)
                 self.current_frame = cv2.cvtColor(self.current_frame, cv2.COLOR_GRAY2BGR)
+
+            if filter == 'sobel':
+                grad_x = cv2.Sobel(self.current_frame, cv2.CV_64F, 1, 0, ksize=3)
+                grad_y = cv2.Sobel(self.current_frame, cv2.CV_64F, 0, 1, ksize=3)
+                abs_grad_x = cv2.convertScaleAbs(grad_x)
+                abs_grad_y = cv2.convertScaleAbs(grad_y)
+                self.current_frame = cv2.addWeighted(abs_grad_x, 0.5, abs_grad_y, 0.5, 0)
             
             if filter == 'gray':
                 gray = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2GRAY)
@@ -309,6 +356,7 @@ class VideoImageProcessor:
                 _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
                 self.current_frame = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
     
+    # Funções de atualização do quadro exibido na reprodução do vídeo
     def update_video_frame(self):
         if self.cap is not None and not self.is_paused:
             if self.is_video_reverse:
@@ -318,7 +366,6 @@ class VideoImageProcessor:
             else:
                 if self.video_current_frame < self.cap.get(cv2.CAP_PROP_POS_FRAMES):
                     self.video_current_frame += 1
-            print(self.video_current_frame)
             ret, frame = self.cap.read()
             if ret:
                 self.original_frame = frame.copy()
@@ -327,13 +374,12 @@ class VideoImageProcessor:
                 self.show_frame()
             self.root.after(int(30 / self.video_speed), self.update_video_frame)
         elif self.is_paused:
-            print (self.video_filters)
             if self.original_frame is not None:
                 self.current_frame = self.original_frame.copy()
                 self.apply_filters_on_video()
                 self.show_frame()
 
-    
+    # Função de exibir o frame na tela
     def show_frame(self):
         if self.current_frame is not None:
             # Converter BGR para RGB
@@ -360,7 +406,7 @@ class VideoImageProcessor:
             self.canvas.create_image(canvas_width//2, canvas_height//2, 
                                    image=self.photo, anchor=tk.CENTER)
     
-    # Funções de filtros
+    # -------- Funções de filtros ---------
     def apply_blur(self):
         if self.mode_var.get() == 'image':
             if self.current_frame is not None:
@@ -460,25 +506,13 @@ class VideoImageProcessor:
                 
         elif self.mode_var.get() == 'video':
             if self.cap is not None:
-                # Loop para ler todos os quadros enquanto o vídeo está sendo processado
-                while True:
-                    ret, frame = self.cap.read()  # Ler o próximo quadro
-                    if not ret:  # Se não há mais quadros, sair do loop
-                        break
-
-                    grad_x = cv2.Sobel(self.current_frame, cv2.CV_64F, 1, 0, ksize=3)
-                    grad_y = cv2.Sobel(self.current_frame, cv2.CV_64F, 0, 1, ksize=3)
-                    abs_grad_x = cv2.convertScaleAbs(grad_x)
-                    abs_grad_y = cv2.convertScaleAbs(grad_y)
-                    self.current_frame = cv2.addWeighted(abs_grad_x, 0.5, abs_grad_y, 0.5, 0)
-                    self.show_frame()
-                
-                # Se a flag 'independent' for utilizada, retorne ao quadro original após aplicar
                 if self.processing_mode.get() == 'independent':
-                    self.current_frame = self.original_frame
-                    self.show_frame()
+                    self.video_filters.clear()
+                self.video_filters.append('sobel')
+                if self.is_paused:
+                    self.update_video_frame()
     
-    # Funções de cor
+    # --------- Funções de cor -----------
     def convert_grayscale(self):
         if self.mode_var.get() == 'image':
             if self.current_frame is not None:
@@ -528,7 +562,7 @@ class VideoImageProcessor:
                 if self.is_paused:
                     self.update_video_frame()
 
-    # Funções de ROI
+    # ----------- Funções de ROI -------------
     def start_roi(self, event):
         self.roi_points = [(event.x, event.y)]
         self.drawing_roi = True
@@ -544,6 +578,14 @@ class VideoImageProcessor:
             self.roi_points.append((event.x, event.y))
             self.drawing_roi = False
             self.process_roi()
+
+    def save_roi(self):
+        # Opção de salvar
+        if messagebox.askyesno("Salvar ROI", "Deseja salvar a região selecionada?"):
+            filename = filedialog.asksaveasfilename(defaultextension=".png",
+                                                filetypes=[("PNG files", "*.png")])
+            if filename:
+                cv2.imwrite(filename, self.roi_image)
     
     def process_roi(self):
         if len(self.roi_points) == 2:
@@ -558,28 +600,73 @@ class VideoImageProcessor:
 
             x1 = max(0, x1)
             y1 = max(0, y1)
-            
-            # Extrair ROI
-            roi = self.current_frame[min(y1,y2):max(y1,y2), min(x1,x2):max(x1,x2)]
 
-            try:
-                roi_ = cv2.resize(roi, (max(1, int(roi.shape[1] / self.ratio)), max(1, int(roi.shape[0] / self.ratio))))
-            except Exception as e:
-                print("Erro ao tentar adquirir ROI")
-                return
-            
-            
-            # Mostrar ROI em nova janela
-            cv2.imshow("Region of Interest", roi_)
-            
-            # Opção de salvar
-            if messagebox.askyesno("Salvar ROI", "Deseja salvar a região selecionada?"):
-                filename = filedialog.asksaveasfilename(defaultextension=".png",
-                                                      filetypes=[("PNG files", "*.png")])
-                if filename:
-                    cv2.imwrite(filename, roi)
+            if self.roi_zoom_var.get() == 'roi':
+                # Extrair ROI
+                self.roi_image = self.current_frame[min(y1,y2):max(y1,y2), min(x1,x2):max(x1,x2)]
+
+                if messagebox.askyesno("Abrir ROI", "Abrir em janela separada?"):
+                    try:
+                        roi_ = cv2.resize(self.roi_image, (max(1, int(self.roi_image.shape[1] / self.ratio)), 
+                                                        max(1, int(self.roi_image.shape[0] / self.ratio))))
+                    except Exception as e:
+                        print("Erro ao tentar adquirir ROI")
+                        return
+
+                    # Mostrar ROI em nova janela
+                    cv2.imshow("Region of Interest", roi_)
+                else:            
+                    frame_rgb = cv2.cvtColor(self.roi_image, cv2.COLOR_BGR2RGB)
+
+                    # Redimensionar mantendo proporção
+                    height, width = frame_rgb.shape[:2]
+                    canvas_width = self.roi_canvas.winfo_width()
+                    canvas_height = self.roi_canvas.winfo_height()
+                    
+                    self.roi_ratio = max(width/canvas_width, height/canvas_height)
+                    new_width = int(width / self.roi_ratio)
+                    new_height = int(height / self.roi_ratio)
+                    
+                    frame_resized = cv2.resize(frame_rgb, (new_width, new_height))
+
+                    self.roi_photo = ImageTk.PhotoImage(image=Image.fromarray(frame_resized))
+
+                    # Mostrar na canvas
+                    self.roi_canvas.delete("all")
+                    self.roi_canvas.create_image(canvas_width//2, canvas_height//2, 
+                                        image=self.roi_photo, anchor=tk.CENTER)
+                
+            elif self.roi_zoom_var.get() == 'zoom':
+                if messagebox.askyesno("Zoom", "Deseja aplicar Zoom?"):
+                    # Aplicando Zoom
+                    self.current_frame = self.current_frame[min(y1,y2):max(y1,y2), min(x1,x2):max(x1,x2)]
+
+                    # Redimensionar mantendo proporção
+                    height, width = self.current_frame.shape[:2]
+                    
+                    canvas_width = self.canvas.winfo_width()
+                    canvas_height = self.canvas.winfo_height()
+
+                    self.ratio = max(width/canvas_width, height/canvas_height)
+                    new_width = int(width / self.ratio)
+                    new_height = int(height / self.ratio)
+
+                    self.image_offset = ((canvas_width - new_width) / 2, (canvas_height - new_height) / 2)
+                    
+                    frame_resized = cv2.resize(self.current_frame, (new_width, new_height))
+
+                    frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+
+                    self.photo = ImageTk.PhotoImage(image=Image.fromarray(frame_rgb))
+
+                    # Mostrar na canvas
+                    self.canvas.delete("all")
+                    self.canvas.create_image(canvas_width//2, canvas_height//2, 
+                                        image=self.photo, anchor=tk.CENTER)
+                
     
-    # Funções de controle de vídeo
+    # ------------- Funções de controle de vídeo --------------
+    # Velocidade
     def speed_up(self):
         if self.video_speed < 5:
             self.video_speed *= 1.5
@@ -590,11 +677,13 @@ class VideoImageProcessor:
             self.video_speed *= 0.75
         self.label_speed_value.configure(text="{:.1f}".format(self.video_speed) + 'x')
 
+    # Pausa    
     def toggle_pause(self):
         self.is_paused = not self.is_paused
         if not self.is_paused:
             self.update_video_frame()
     
+    # Direção de reprodução do vídeo
     def toggle_direction(self):
         if self.cap is not None:
             if self.is_video_reverse:
@@ -602,22 +691,15 @@ class VideoImageProcessor:
             else:
                 self.is_video_reverse = True
     
+    # Marcar ponto de corte
     def mark_cutpoint(self):
         if self.cap is not None:
             current_time = self.cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
             self.video_cutpoints.append(current_time)
             messagebox.showinfo("Ponto Marcado", 
                               f"Tempo marcado: {timedelta(seconds=int(current_time))}")
-
-    def on_click(self, event):
-        # Marca o ponto de corte no clique do mouse
-        self.mark_cutpoint()
-        
-
-    def on_space(self, event):
-        # Marca o ponto de corte ao pressionar a barra de espaço
-        self.mark_cutpoint()
     
+    # Salvar segmentos cortados
     def save_video_segments(self):
         if not self.video_cutpoints:
             messagebox.showwarning("Aviso", "Nenhum ponto de corte marcado!")
@@ -684,6 +766,7 @@ class VideoImageProcessor:
         messagebox.showinfo("Concluído", "Segmentos salvos com sucesso!")
         self.video_cutpoints = []  # Limpar pontos de corte
     
+    # Aplicar zoom e abrir em nova janela
     def apply_zoom(self, factor):
         if self.current_frame is not None and len(self.roi_points) == 2:
             x1, y1 = self.roi_points[0]
@@ -711,6 +794,7 @@ class VideoImageProcessor:
                 if filename:
                     cv2.imwrite(filename, zoomed)
     
+    # Controle de exclusão do objeto
     def __del__(self):
         if self.cap is not None:
             self.cap.release()
