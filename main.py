@@ -18,6 +18,7 @@ class VideoImageProcessor:
         self.cap = None
         self.current_frame = None
         self.original_frame = None
+        self.zoomed_frame = None
         self.roi_points = []
         self.drawing_roi = False
         self.video_cutpoints = []
@@ -26,6 +27,7 @@ class VideoImageProcessor:
         self.is_paused = False
         self.is_video_reverse = False
         self.video_current_frame = 0
+        self.zoom_rect = (0, 0, 0, 0)
 
         self.video_filters = []
         
@@ -269,7 +271,7 @@ class VideoImageProcessor:
      
     # Função de controle do tamanho da janela
     def window_resize(self, event: tk.Event):
-        if self.root.winfo_height() < 900:
+        #if self.root.winfo_height() < 900:
             self.canvas.configure(height=self.root.winfo_height() - 380)
             self.show_frame()              
     
@@ -281,6 +283,7 @@ class VideoImageProcessor:
         self.current_frame = None
         self.original_frame = None
         self.is_paused = False
+        self.zoom_rect = (0, 0, 0, 0)
         self.canvas.delete("all")
     
     # Funções de abertura de arquivo (geral)
@@ -292,6 +295,7 @@ class VideoImageProcessor:
         
         filename = filedialog.askopenfilename(filetypes=filetypes)
         if filename:
+            self.mode_changed()
             self.current_file = filename
             if self.mode_var.get() == "video":
                 self.open_video()
@@ -320,41 +324,44 @@ class VideoImageProcessor:
         self.update_video_frame()
 
     # Funções de aplicação de filtro em vídeo
-    def apply_filters_on_video(self):
+    def apply_filters_on_video(self, frame):
+        processed_frame = frame.copy()
         for filter in self.video_filters:
             if filter == 'blur':
-                self.current_frame = cv2.GaussianBlur(self.current_frame, (5,5), 0)
+                processed_frame = cv2.GaussianBlur(processed_frame, (5,5), 0)
             
             if filter == 'sharpen':
                 kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
-                self.current_frame =  cv2.filter2D(self.current_frame, -1, kernel)
+                processed_frame =  cv2.filter2D(processed_frame, -1, kernel)
             
             if filter == 'emboss':
                 kernel = np.array([[-2,-1,0], [-1,1,1], [0,1,2]])
-                self.current_frame =  cv2.filter2D(self.current_frame, -1, kernel)
+                processed_frame =  cv2.filter2D(processed_frame, -1, kernel)
             
             if filter == 'laplacian':
-                self.current_frame =  cv2.Laplacian(self.current_frame, cv2.CV_64F).astype(np.uint8)
+                processed_frame =  cv2.Laplacian(processed_frame, cv2.CV_64F).astype(np.uint8)
             
             if filter == 'canny':
-                self.current_frame = cv2.Canny(self.current_frame, 100, 200)
-                self.current_frame = cv2.cvtColor(self.current_frame, cv2.COLOR_GRAY2BGR)
+                processed_frame = cv2.Canny(processed_frame, 100, 200)
+                processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2BGR)
 
             if filter == 'sobel':
-                grad_x = cv2.Sobel(self.current_frame, cv2.CV_64F, 1, 0, ksize=3)
-                grad_y = cv2.Sobel(self.current_frame, cv2.CV_64F, 0, 1, ksize=3)
+                grad_x = cv2.Sobel(processed_frame, cv2.CV_64F, 1, 0, ksize=3)
+                grad_y = cv2.Sobel(processed_frame, cv2.CV_64F, 0, 1, ksize=3)
                 abs_grad_x = cv2.convertScaleAbs(grad_x)
                 abs_grad_y = cv2.convertScaleAbs(grad_y)
-                self.current_frame = cv2.addWeighted(abs_grad_x, 0.5, abs_grad_y, 0.5, 0)
+                processed_frame = cv2.addWeighted(abs_grad_x, 0.5, abs_grad_y, 0.5, 0)
             
             if filter == 'gray':
-                gray = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2GRAY)
-                self.current_frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+                gray = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2GRAY)
+                processed_frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
             
             if filter == 'binary':
-                gray = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2GRAY)
+                gray = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2GRAY)
                 _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
-                self.current_frame = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+                processed_frame = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+
+        return processed_frame
     
     # Funções de atualização do quadro exibido na reprodução do vídeo
     def update_video_frame(self):
@@ -369,15 +376,20 @@ class VideoImageProcessor:
             ret, frame = self.cap.read()
             if ret:
                 self.original_frame = frame.copy()
-                self.current_frame = frame
-                self.apply_filters_on_video()
-                self.show_frame()
+                self.current_frame = self.apply_filters_on_video(frame)
+                if self.is_zoomed():
+                    self.current_frame = self.apply_zoom_video(self.current_frame)
+                else:
+                    self.show_frame()
             self.root.after(int(30 / self.video_speed), self.update_video_frame)
         elif self.is_paused:
             if self.original_frame is not None:
                 self.current_frame = self.original_frame.copy()
-                self.apply_filters_on_video()
-                self.show_frame()
+                self.current_frame = self.apply_filters_on_video(self.current_frame)
+                if self.is_zoomed():
+                    self.current_frame = self.apply_zoom_video(self.current_frame)
+                else:
+                    self.show_frame()
 
     # Função de exibir o frame na tela
     def show_frame(self):
@@ -405,7 +417,277 @@ class VideoImageProcessor:
             self.canvas.delete("all")
             self.canvas.create_image(canvas_width//2, canvas_height//2, 
                                    image=self.photo, anchor=tk.CENTER)
+
+    # ----------- Funções de ROI -------------
+    def start_roi(self, event):
+        self.roi_points = [(event.x, event.y)]
+        self.drawing_roi = True
     
+    def draw_roi(self, event):
+        if self.drawing_roi:
+            self.canvas.delete("roi")
+            self.canvas.create_rectangle(self.roi_points[0][0], self.roi_points[0][1],
+                                      event.x, event.y, outline="red", tags="roi")
+    
+    def end_roi(self, event):
+        if self.drawing_roi:
+            self.roi_points.append((event.x, event.y))
+            self.drawing_roi = False
+            self.process_roi()
+
+    def save_roi(self):
+        # Opção de salvar
+        if messagebox.askyesno("Salvar ROI", "Deseja salvar a região selecionada?"):
+            filename = filedialog.asksaveasfilename(defaultextension=".png",
+                                                filetypes=[("PNG files", "*.png")])
+            if filename:
+                cv2.imwrite(filename, self.roi_image)
+    
+    def process_roi(self):
+        if len(self.roi_points) == 2:
+            # Converter coordenadas do canvas para coordenadas da imagem
+            x1, y1 = self.roi_points[0]
+            x2, y2 = self.roi_points[1]
+
+            print(self.image_offset[0], self.image_offset[1], self.ratio)
+
+            x1 = int((x1 - self.image_offset[0]) * self.ratio)
+            x2 = int((x2 - self.image_offset[0]) * self.ratio)
+            y1 = int((y1 - self.image_offset[1]) * self.ratio)
+            y2 = int((y2 - self.image_offset[1]) * self.ratio)
+
+            x1 = max(0, x1)
+            y1 = max(0, y1)
+
+            if self.roi_zoom_var.get() == 'roi':
+                # Extrair ROI
+                self.roi_image = self.current_frame[min(y1,y2):max(y1,y2), min(x1,x2):max(x1,x2)]
+
+                if messagebox.askyesno("Abrir ROI", "Abrir em janela separada?"):
+                    try:
+                        roi_ = cv2.resize(self.roi_image, (max(1, int(self.roi_image.shape[1] / self.ratio)), 
+                                                        max(1, int(self.roi_image.shape[0] / self.ratio))))
+                    except Exception as e:
+                        print("Erro ao tentar adquirir ROI")
+                        return
+
+                    # Mostrar ROI em nova janela
+                    cv2.imshow("Region of Interest", roi_)
+                else:            
+                    frame_rgb = cv2.cvtColor(self.roi_image, cv2.COLOR_BGR2RGB)
+
+                    # Redimensionar mantendo proporção
+                    height, width = frame_rgb.shape[:2]
+                    canvas_width = self.roi_canvas.winfo_width()
+                    canvas_height = self.roi_canvas.winfo_height()
+                    
+                    self.roi_ratio = max(width/canvas_width, height/canvas_height)
+                    new_width = int(width / self.roi_ratio)
+                    new_height = int(height / self.roi_ratio)
+                    
+                    frame_resized = cv2.resize(frame_rgb, (new_width, new_height))
+
+                    self.roi_photo = ImageTk.PhotoImage(image=Image.fromarray(frame_resized))
+
+                    # Mostrar na canvas
+                    self.roi_canvas.delete("all")
+                    self.roi_canvas.create_image(canvas_width//2, canvas_height//2, 
+                                        image=self.roi_photo, anchor=tk.CENTER)
+                    
+                
+            elif self.roi_zoom_var.get() == 'zoom':
+                if messagebox.askyesno("Zoom", "Deseja aplicar Zoom?"):
+                    self.zoom_rect = (x1, x2, y1, y2)
+                    if self.is_paused:
+                            self.update_video_frame()
+                    if self.mode_var.get() == "image":
+                        self.apply_zoom_image()
+                
+    
+    # ------------- Funções de controle de vídeo --------------
+    # Velocidade
+    def speed_up(self):
+        if self.video_speed < 5:
+            self.video_speed *= 1.5
+        self.label_speed_value.configure(text="{:.1f}".format(self.video_speed) + 'x')
+    
+    def slow_down(self):
+        if self.video_speed > 0.1:
+            self.video_speed *= 0.75
+        self.label_speed_value.configure(text="{:.1f}".format(self.video_speed) + 'x')
+
+    # Pausa    
+    def toggle_pause(self):
+        self.is_paused = not self.is_paused
+        if not self.is_paused:
+            self.update_video_frame()
+    
+    # Direção de reprodução do vídeo
+    def toggle_direction(self):
+        if self.cap is not None:
+            if self.is_video_reverse:
+                self.is_video_reverse = False
+            else:
+                self.is_video_reverse = True
+    
+    # Marcar ponto de corte
+    def mark_cutpoint(self):
+        if self.cap is not None:
+            current_time = self.cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+            self.video_cutpoints.append(current_time)
+            messagebox.showinfo("Ponto Marcado", 
+                              f"Tempo marcado: {timedelta(seconds=int(current_time))}")
+    
+    # Salvar segmentos cortados
+    def save_video_segments(self):
+        if not self.video_cutpoints:
+            messagebox.showwarning("Aviso", "Nenhum ponto de corte marcado!")
+            return
+        
+        # Ordenar pontos de corte
+        self.video_cutpoints.sort()
+        
+        # Adicionar início e fim do vídeo
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        total_duration = self.cap.get(cv2.CAP_PROP_FRAME_COUNT) / self.cap.get(cv2.CAP_PROP_FPS)
+        points = [0] + self.video_cutpoints + [total_duration]
+        
+        # Perguntar modo de salvamento
+        save_mode = messagebox.askyesno("Modo de Salvamento", 
+                                      "Deseja salvar como frames?\n'Sim' para frames, 'Não' para vídeo")
+        
+        # Criar diretório para salvar
+        save_dir = filedialog.askdirectory(title="Selecione pasta para salvar")
+        if not save_dir:
+            return
+        
+        # Processar cada segmento
+        for i in range(len(points) - 1):
+            start_time = points[i]
+            end_time = points[i+1]
+            
+            # Configurar posição inicial
+            self.cap.set(cv2.CAP_PROP_POS_MSEC, start_time * 1000)
+            
+            if save_mode:  # Salvar como frames
+                frames_dir = os.path.join(save_dir, f"segment_{i+1}_frames")
+                os.makedirs(frames_dir, exist_ok=True)
+                frame_count = 0
+                
+                while self.cap.get(cv2.CAP_PROP_POS_MSEC) < end_time * 1000:
+                    ret, frame = self.cap.read()
+                    if not ret:
+                        break
+                    
+                    frame_path = os.path.join(frames_dir, f"frame_{frame_count:04d}.png")
+                    cv2.imwrite(frame_path, frame)
+                    frame_count += 1
+            
+            else:  # Salvar como vídeo
+                # Obter propriedades do vídeo original
+                fps = self.cap.get(cv2.CAP_PROP_FPS)
+                width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                
+                # Configurar writer
+                output_path = os.path.join(save_dir, f"segment_{i+1}.mp4")
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+                
+                while self.cap.get(cv2.CAP_PROP_POS_MSEC) < end_time * 1000:
+                    ret, frame = self.cap.read()
+                    if not ret:
+                        break
+                    out.write(frame)
+                
+                out.release()
+        
+        messagebox.showinfo("Concluído", "Segmentos salvos com sucesso!")
+        self.video_cutpoints = []  # Limpar pontos de corte
+     
+    def apply_zoom_image(self):
+        x1 = self.zoom_rect[0]
+        x2 = self.zoom_rect[1]
+        y1 = self.zoom_rect[2]
+        y2 = self.zoom_rect[3]
+
+        # Aplicando Zoom
+        if self.zoomed_frame is not None:
+            self.current_frame = self.zoomed_frame[min(y1,y2):max(y1,y2), min(x1,x2):max(x1,x2)]
+        else:   
+            self.current_frame = self.current_frame[min(y1,y2):max(y1,y2), min(x1,x2):max(x1,x2)]
+        
+        self.zoomed_frame = self.current_frame.copy()
+        self.original_frame = self.zoomed_frame.copy()
+
+        # Redimensionar mantendo proporção
+        height, width = self.current_frame.shape[:2]
+        
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+
+        self.ratio = max(width/canvas_width, height/canvas_height)
+        new_width = int(width / self.ratio)
+        new_height = int(height / self.ratio)
+
+        self.image_offset = ((canvas_width - new_width) / 2, (canvas_height - new_height) / 2)
+        
+        frame_resized = cv2.resize(self.current_frame, (new_width, new_height))
+
+        frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+
+        self.photo = ImageTk.PhotoImage(image=Image.fromarray(frame_rgb))
+
+        # Mostrar na canvas
+        self.canvas.delete("all")
+        self.canvas.create_image(canvas_width//2, canvas_height//2, 
+                            image=self.photo, anchor=tk.CENTER)
+    
+    # Aplicar zoom e abrir em nova janela (Retorna frame com zoom)
+    def apply_zoom_video(self, original_frame):
+        x1 = self.zoom_rect[0]
+        x2 = self.zoom_rect[1]
+        y1 = self.zoom_rect[2]
+        y2 = self.zoom_rect[3]
+
+        # Aplicando Zoom
+        self.zoomed_frame = original_frame[min(y1,y2):max(y1,y2), min(x1,x2):max(x1,x2)]
+
+        # Redimensionar mantendo proporção
+        height, width = self.zoomed_frame.shape[:2]
+        
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+
+        self.ratio = max(width/canvas_width, height/canvas_height)
+        new_width = int(width / self.ratio)
+        new_height = int(height / self.ratio)
+
+        self.image_offset = ((canvas_width - new_width) / 2, (canvas_height - new_height) / 2)
+        
+        frame_resized = cv2.resize(self.zoomed_frame, (new_width, new_height))
+
+        frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+
+        self.photo = ImageTk.PhotoImage(image=Image.fromarray(frame_rgb))
+
+        # Mostrar na canvas
+        self.canvas.delete("all")
+        self.canvas.create_image(canvas_width//2, canvas_height//2, 
+                            image=self.photo, anchor=tk.CENTER)
+
+        return self.zoomed_frame.copy()
+
+    def is_zoomed(self) -> bool:
+        x1 = self.zoom_rect[0]
+        x2 = self.zoom_rect[1]
+        y1 = self.zoom_rect[2]
+        y2 = self.zoom_rect[3]
+
+        if x1 == 0 and x2 == 0 and y1 == 0 and y2 == 0:
+            return False
+        return True
+
     # -------- Funções de filtros ---------
     def apply_blur(self):
         if self.mode_var.get() == 'image':
@@ -561,238 +843,6 @@ class VideoImageProcessor:
                 self.video_filters.clear()
                 if self.is_paused:
                     self.update_video_frame()
-
-    # ----------- Funções de ROI -------------
-    def start_roi(self, event):
-        self.roi_points = [(event.x, event.y)]
-        self.drawing_roi = True
-    
-    def draw_roi(self, event):
-        if self.drawing_roi:
-            self.canvas.delete("roi")
-            self.canvas.create_rectangle(self.roi_points[0][0], self.roi_points[0][1],
-                                      event.x, event.y, outline="red", tags="roi")
-    
-    def end_roi(self, event):
-        if self.drawing_roi:
-            self.roi_points.append((event.x, event.y))
-            self.drawing_roi = False
-            self.process_roi()
-
-    def save_roi(self):
-        # Opção de salvar
-        if messagebox.askyesno("Salvar ROI", "Deseja salvar a região selecionada?"):
-            filename = filedialog.asksaveasfilename(defaultextension=".png",
-                                                filetypes=[("PNG files", "*.png")])
-            if filename:
-                cv2.imwrite(filename, self.roi_image)
-    
-    def process_roi(self):
-        if len(self.roi_points) == 2:
-            # Converter coordenadas do canvas para coordenadas da imagem
-            x1, y1 = self.roi_points[0]
-            x2, y2 = self.roi_points[1]
-
-            x1 = int((x1 - self.image_offset[0]) * self.ratio)
-            x2 = int((x2 - self.image_offset[0]) * self.ratio)
-            y1 = int((y1 - self.image_offset[1]) * self.ratio)
-            y2 = int((y2 - self.image_offset[1]) * self.ratio)
-
-            x1 = max(0, x1)
-            y1 = max(0, y1)
-
-            if self.roi_zoom_var.get() == 'roi':
-                # Extrair ROI
-                self.roi_image = self.current_frame[min(y1,y2):max(y1,y2), min(x1,x2):max(x1,x2)]
-
-                if messagebox.askyesno("Abrir ROI", "Abrir em janela separada?"):
-                    try:
-                        roi_ = cv2.resize(self.roi_image, (max(1, int(self.roi_image.shape[1] / self.ratio)), 
-                                                        max(1, int(self.roi_image.shape[0] / self.ratio))))
-                    except Exception as e:
-                        print("Erro ao tentar adquirir ROI")
-                        return
-
-                    # Mostrar ROI em nova janela
-                    cv2.imshow("Region of Interest", roi_)
-                else:            
-                    frame_rgb = cv2.cvtColor(self.roi_image, cv2.COLOR_BGR2RGB)
-
-                    # Redimensionar mantendo proporção
-                    height, width = frame_rgb.shape[:2]
-                    canvas_width = self.roi_canvas.winfo_width()
-                    canvas_height = self.roi_canvas.winfo_height()
-                    
-                    self.roi_ratio = max(width/canvas_width, height/canvas_height)
-                    new_width = int(width / self.roi_ratio)
-                    new_height = int(height / self.roi_ratio)
-                    
-                    frame_resized = cv2.resize(frame_rgb, (new_width, new_height))
-
-                    self.roi_photo = ImageTk.PhotoImage(image=Image.fromarray(frame_resized))
-
-                    # Mostrar na canvas
-                    self.roi_canvas.delete("all")
-                    self.roi_canvas.create_image(canvas_width//2, canvas_height//2, 
-                                        image=self.roi_photo, anchor=tk.CENTER)
-                
-            elif self.roi_zoom_var.get() == 'zoom':
-                if messagebox.askyesno("Zoom", "Deseja aplicar Zoom?"):
-                    # Aplicando Zoom
-                    self.current_frame = self.current_frame[min(y1,y2):max(y1,y2), min(x1,x2):max(x1,x2)]
-
-                    # Redimensionar mantendo proporção
-                    height, width = self.current_frame.shape[:2]
-                    
-                    canvas_width = self.canvas.winfo_width()
-                    canvas_height = self.canvas.winfo_height()
-
-                    self.ratio = max(width/canvas_width, height/canvas_height)
-                    new_width = int(width / self.ratio)
-                    new_height = int(height / self.ratio)
-
-                    self.image_offset = ((canvas_width - new_width) / 2, (canvas_height - new_height) / 2)
-                    
-                    frame_resized = cv2.resize(self.current_frame, (new_width, new_height))
-
-                    frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
-
-                    self.photo = ImageTk.PhotoImage(image=Image.fromarray(frame_rgb))
-
-                    # Mostrar na canvas
-                    self.canvas.delete("all")
-                    self.canvas.create_image(canvas_width//2, canvas_height//2, 
-                                        image=self.photo, anchor=tk.CENTER)
-                
-    
-    # ------------- Funções de controle de vídeo --------------
-    # Velocidade
-    def speed_up(self):
-        if self.video_speed < 5:
-            self.video_speed *= 1.5
-        self.label_speed_value.configure(text="{:.1f}".format(self.video_speed) + 'x')
-    
-    def slow_down(self):
-        if self.video_speed > 0.1:
-            self.video_speed *= 0.75
-        self.label_speed_value.configure(text="{:.1f}".format(self.video_speed) + 'x')
-
-    # Pausa    
-    def toggle_pause(self):
-        self.is_paused = not self.is_paused
-        if not self.is_paused:
-            self.update_video_frame()
-    
-    # Direção de reprodução do vídeo
-    def toggle_direction(self):
-        if self.cap is not None:
-            if self.is_video_reverse:
-                self.is_video_reverse = False
-            else:
-                self.is_video_reverse = True
-    
-    # Marcar ponto de corte
-    def mark_cutpoint(self):
-        if self.cap is not None:
-            current_time = self.cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
-            self.video_cutpoints.append(current_time)
-            messagebox.showinfo("Ponto Marcado", 
-                              f"Tempo marcado: {timedelta(seconds=int(current_time))}")
-    
-    # Salvar segmentos cortados
-    def save_video_segments(self):
-        if not self.video_cutpoints:
-            messagebox.showwarning("Aviso", "Nenhum ponto de corte marcado!")
-            return
-        
-        # Ordenar pontos de corte
-        self.video_cutpoints.sort()
-        
-        # Adicionar início e fim do vídeo
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-        total_duration = self.cap.get(cv2.CAP_PROP_FRAME_COUNT) / self.cap.get(cv2.CAP_PROP_FPS)
-        points = [0] + self.video_cutpoints + [total_duration]
-        
-        # Perguntar modo de salvamento
-        save_mode = messagebox.askyesno("Modo de Salvamento", 
-                                      "Deseja salvar como frames?\n'Sim' para frames, 'Não' para vídeo")
-        
-        # Criar diretório para salvar
-        save_dir = filedialog.askdirectory(title="Selecione pasta para salvar")
-        if not save_dir:
-            return
-        
-        # Processar cada segmento
-        for i in range(len(points) - 1):
-            start_time = points[i]
-            end_time = points[i+1]
-            
-            # Configurar posição inicial
-            self.cap.set(cv2.CAP_PROP_POS_MSEC, start_time * 1000)
-            
-            if save_mode:  # Salvar como frames
-                frames_dir = os.path.join(save_dir, f"segment_{i+1}_frames")
-                os.makedirs(frames_dir, exist_ok=True)
-                frame_count = 0
-                
-                while self.cap.get(cv2.CAP_PROP_POS_MSEC) < end_time * 1000:
-                    ret, frame = self.cap.read()
-                    if not ret:
-                        break
-                    
-                    frame_path = os.path.join(frames_dir, f"frame_{frame_count:04d}.png")
-                    cv2.imwrite(frame_path, frame)
-                    frame_count += 1
-            
-            else:  # Salvar como vídeo
-                # Obter propriedades do vídeo original
-                fps = self.cap.get(cv2.CAP_PROP_FPS)
-                width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                
-                # Configurar writer
-                output_path = os.path.join(save_dir, f"segment_{i+1}.mp4")
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-                
-                while self.cap.get(cv2.CAP_PROP_POS_MSEC) < end_time * 1000:
-                    ret, frame = self.cap.read()
-                    if not ret:
-                        break
-                    out.write(frame)
-                
-                out.release()
-        
-        messagebox.showinfo("Concluído", "Segmentos salvos com sucesso!")
-        self.video_cutpoints = []  # Limpar pontos de corte
-    
-    # Aplicar zoom e abrir em nova janela
-    def apply_zoom(self, factor):
-        if self.current_frame is not None and len(self.roi_points) == 2:
-            x1, y1 = self.roi_points[0]
-            x2, y2 = self.roi_points[1]
-            
-            # Extrair ROI
-            roi = self.current_frame[min(y1,y2):max(y1,y2), min(x1,x2):max(x1,x2)]
-            
-            # Calcular novas dimensões
-            height, width = roi.shape[:2]
-            new_height = int(height * factor)
-            new_width = int(width * factor)
-            
-            # Redimensionar
-            zoomed = cv2.resize(roi, (new_width, new_height), 
-                              interpolation=cv2.INTER_LINEAR if factor > 1 else cv2.INTER_AREA)
-            
-            # Mostrar resultado
-            cv2.imshow("Zoomed Region", zoomed)
-            
-            # Opção de salvar
-            if messagebox.askyesno("Salvar Zoom", "Deseja salvar a região com zoom?"):
-                filename = filedialog.asksaveasfilename(defaultextension=".png",
-                                                      filetypes=[("PNG files", "*.png")])
-                if filename:
-                    cv2.imwrite(filename, zoomed)
     
     # Controle de exclusão do objeto
     def __del__(self):
