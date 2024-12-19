@@ -5,7 +5,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 import os
-from datetime import timedelta
+from datetime import timedelta, datetime
+import pytz
 
 class VideoImageProcessor:
     def __init__(self, root: ctk.CTk):
@@ -21,6 +22,12 @@ class VideoImageProcessor:
         self.zoomed_frame = None
         self.roi_points = []
         self.drawing_roi = False
+        self.recording = False
+        self.recording_mode = "video"
+        self.webcam_save_dir = ""
+        self.webcam_record_frames = 0
+        self.save_recording = False
+        self.webcam_writer = None
         self.video_cutpoints = []
         self.video_speed = 1.0
         self.image_offset = (0, 0)
@@ -108,6 +115,10 @@ class VideoImageProcessor:
         radiobutton_video = ctk.CTkRadioButton(controls_frame, text="Vídeo", variable=self.mode_var, value="video", 
                                                font=("Trebuchet MS", 12, "bold"), command=self.mode_changed)
         radiobutton_video.grid(row=0, column=3, sticky="w")
+
+        radiobutton_webcam = ctk.CTkRadioButton(controls_frame, text="Webcam", variable=self.mode_var, value="webcam",
+                                               font=("Trebuchet MS", 12, "bold"), command=self.open_webcam)
+        radiobutton_webcam.grid(row=0, column=4, sticky="w") 
 
         # ---- Seleção para extrair ROI ou aplicar Zoom ----
         label_mode = ctk.CTkLabel(controls_frame, text="Abrir ROI:", text_color="white", font=("Trebuchet MS", 12, "bold"))
@@ -257,17 +268,13 @@ class VideoImageProcessor:
         button_save_segments = ctk.CTkButton(video_frame, text="Salvar Segmentos", command=self.save_video_segments, 
                                              corner_radius=8, width=70, height=20, fg_color="#585858", 
                                              text_color="white", font=("Trebuchet MS", 12, "bold"))
-        button_save_segments.grid(row=2, column=2, padx=5, pady=5)
+        button_save_segments.grid(row=2, column=2, padx=5, pady=5)      
 
-        button_minus_zoom = ctk.CTkButton(video_frame, text="Zoom -", command=lambda: self.apply_zoom(0.5),
+        # ---- Gravar Webcam ----
+        self.button_record_webcam = ctk.CTkButton(video_frame, text="Iniciar Gravação", command=self.record_webcam, 
                                              corner_radius=8, width=70, height=20, fg_color="#585858", 
                                              text_color="white", font=("Trebuchet MS", 12, "bold"))
-        button_minus_zoom.grid(row=3, column=0, columnspan=1, padx=5, pady=5)
-
-        button_more_zoom = ctk.CTkButton(video_frame, text="Zoom +", command=lambda: self.apply_zoom(2.0),
-                                             corner_radius=8, width=70, height=20, fg_color="#585858", 
-                                             text_color="white", font=("Trebuchet MS", 12, "bold"))
-        button_more_zoom.grid(row=3, column=1, columnspan=1, padx=5, pady=5)        
+        self.button_record_webcam.grid(row=3, column=0, padx=5, pady=5)      
      
     # Função de controle do tamanho da janela
     def window_resize(self, event: tk.Event):
@@ -284,14 +291,18 @@ class VideoImageProcessor:
         self.original_frame = None
         self.is_paused = False
         self.zoom_rect = (0, 0, 0, 0)
+        self.video_cutpoints = []
         self.canvas.delete("all")
     
     # Funções de abertura de arquivo (geral)
     def open_file(self):
         if self.mode_var.get() == "image":
             filetypes = [("Image files", "*.png *.jpg *.jpeg *.bmp *.gif")]
-        else:
+        elif self.mode_var.get() == "video":
             filetypes = [("Video files", "*.mp4 *.avi *.mov")]
+        elif self.mode_var.get() == "webcam":
+            self.open_webcam()
+            return 
         
         filename = filedialog.askopenfilename(filetypes=filetypes)
         if filename:
@@ -322,6 +333,16 @@ class VideoImageProcessor:
     def open_video(self):
         self.cap = cv2.VideoCapture(self.current_file)
         self.update_video_frame()
+
+    # Funções de abertura da Webcam
+    def open_webcam(self):
+        self.cap = cv2.VideoCapture(0)
+        if not self.cap.isOpened():
+            print("Erro: Não foi possível acessar a webcam.")
+            return
+        
+        # Iniciar atualização do frame
+        self.update_webcam_frame() 
 
     # Funções de aplicação de filtro em vídeo
     def apply_filters_on_video(self, frame):
@@ -390,6 +411,33 @@ class VideoImageProcessor:
                     self.current_frame = self.apply_zoom_video(self.current_frame)
                 else:
                     self.show_frame()
+
+    #Funções de controle da Webcam
+    def update_webcam_frame(self):
+        if self.cap is not None:
+            if self.is_video_reverse:
+                if self.video_current_frame > 0:
+                    self.video_current_frame -= 1
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.video_current_frame)
+            else:
+                if self.video_current_frame < self.cap.get(cv2.CAP_PROP_POS_FRAMES):
+                    self.video_current_frame += 1
+            ret, frame = self.cap.read()
+            if ret and frame is not None:
+                self.original_frame = frame.copy()
+                self.current_frame = self.apply_filters_on_video(frame)
+                if self.is_zoomed():
+                    self.current_frame = self.apply_zoom_video(self.current_frame)
+                else:
+                    self.show_frame()
+                if self.recording == True:
+                    self.save_webcam_record()
+                    
+            else:
+                print("Erro ao capturar o frame da webcam.")
+
+        # Atualizar novamente após 10ms
+        self.root.after(10, self.update_webcam_frame)
 
     # Função de exibir o frame na tela
     def show_frame(self):
@@ -534,11 +582,61 @@ class VideoImageProcessor:
     def mark_cutpoint(self):
         if self.cap is not None:
             current_time = self.cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
-            self.video_cutpoints.append(current_time)
-            messagebox.showinfo("Ponto Marcado", 
-                              f"Tempo marcado: {timedelta(seconds=int(current_time))}")
+            if self.mode_var.get() == "video":
+                self.video_cutpoints.append(current_time)
+                messagebox.showinfo("Ponto Marcado", 
+                                f"Tempo marcado: {timedelta(seconds=int(current_time))}")
     
-    # Salvar segmentos cortados
+    def record_webcam(self):
+        if self.mode_var.get() != "webcam":
+            return
+        if self.recording == False:
+            save_mode = messagebox.askyesno("Modo de Salvamento", 
+                                      "Deseja salvar como frames?\n'Sim' para frames, 'Não' para vídeo")
+            
+            # Criar diretório para salvar
+            self.webcam_save_dir = filedialog.askdirectory(title="Selecione pasta para salvar")
+            if not self.webcam_save_dir:
+                return
+            
+            if save_mode:
+                self.recording_mode = "frames"
+
+            else:
+                self.recording_mode = "video"
+
+            # Obter propriedades do vídeo original
+            fps = self.cap.get(cv2.CAP_PROP_FPS)
+            width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+            # Grava o arquivo do vídeo salvo
+            time_now = datetime.now(pytz.timezone("America/Manaus"))
+            output_path = os.path.join(self.webcam_save_dir, f"segment_{time_now.strftime("%Y-%m-%d_%H-%M-%S")}.mp4")
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            self.webcam_writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+            self.button_record_webcam.configure(text="Parar Gravação")
+            self.recording = True
+            self.webcam_record_frames = 0
+
+        else:
+            self.recording = False
+            self.button_record_webcam.configure(text="Iniciar Gravação")
+            self.webcam_writer.release()
+        
+    def save_webcam_record(self):
+        self.webcam_record_frames += 1
+        if self.recording_mode == "video":
+            self.webcam_writer.write(self.current_frame)
+        elif self.recording_mode == "frames":
+            os.makedirs(os.path.join(self.webcam_save_dir, "recorded_frames"), exist_ok=True)
+            cv2.imwrite(os.path.join(self.webcam_save_dir, "recorded_frames", f"frame_{self.webcam_record_frames}.jpg"), 
+                        self.current_frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+        else:
+            print("Modo de gravação desconhecido")
+    
+    # Salvar segmentos cortados (video)
     def save_video_segments(self):
         if not self.video_cutpoints:
             messagebox.showwarning("Aviso", "Nenhum ponto de corte marcado!")
@@ -579,8 +677,11 @@ class VideoImageProcessor:
                     if not ret:
                         break
                     
-                    frame_path = os.path.join(frames_dir, f"frame_{frame_count:04d}.png")
-                    cv2.imwrite(frame_path, frame)
+                    frame_path = os.path.join(frames_dir, f"frame_{frame_count:04d}.jpg")
+                    frame = self.apply_filters_on_video(frame)
+                    if self.is_zoomed():
+                        frame = self.apply_zoom_video(frame)
+                    cv2.imwrite(frame_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
                     frame_count += 1
             
             else:  # Salvar como vídeo
@@ -598,6 +699,9 @@ class VideoImageProcessor:
                     ret, frame = self.cap.read()
                     if not ret:
                         break
+                    frame = self.apply_filters_on_video(frame)
+                    if self.is_zoomed():
+                        frame = self.apply_zoom_video(frame)
                     out.write(frame)
                 
                 out.release()
@@ -697,7 +801,7 @@ class VideoImageProcessor:
                 self.current_frame = cv2.GaussianBlur(self.current_frame, (5,5), 0)
                 self.show_frame()
                 
-        elif self.mode_var.get() == 'video':
+        elif self.mode_var.get() == 'video' or self.mode_var.get() == 'webcam':
             if self.cap is not None:
                 if self.processing_mode.get() == 'independent':
                     self.video_filters.clear()
@@ -715,7 +819,7 @@ class VideoImageProcessor:
                 self.current_frame = cv2.filter2D(self.current_frame, -1, kernel)
                 self.show_frame()
                 
-        elif self.mode_var.get() == 'video':
+        elif self.mode_var.get() == 'video' or self.mode_var.get() == 'webcam':
             if self.cap is not None:
                 if self.processing_mode.get() == 'independent':
                     self.video_filters.clear()
@@ -732,7 +836,7 @@ class VideoImageProcessor:
                 self.current_frame = cv2.filter2D(self.current_frame, -1, kernel)
                 self.show_frame()
         
-        elif self.mode_var.get() == 'video':
+        elif self.mode_var.get() == 'video' or self.mode_var.get() == 'webcam':
             if self.cap is not None:
                 if self.processing_mode.get() == 'independent':
                     self.video_filters.clear()
@@ -748,7 +852,7 @@ class VideoImageProcessor:
                 self.current_frame = cv2.Laplacian(self.current_frame, cv2.CV_64F).astype(np.uint8)
                 self.show_frame()
 
-        elif self.mode_var.get() == 'video':
+        elif self.mode_var.get() == 'video' or self.mode_var.get() == 'webcam':
             if self.cap is not None:
                 # Loop para ler todos os quadros enquanto o vídeo está sendo processado
                 if self.processing_mode.get() == 'independent':
@@ -766,7 +870,7 @@ class VideoImageProcessor:
                 self.current_frame = cv2.cvtColor(self.current_frame, cv2.COLOR_GRAY2BGR)
                 self.show_frame()
                 
-        elif self.mode_var.get() == 'video':
+        elif self.mode_var.get() == 'video' or self.mode_var.get() == 'webcam':
             if self.cap is not None:
                 if self.processing_mode.get() == 'independent':
                     self.video_filters.clear()
@@ -786,7 +890,7 @@ class VideoImageProcessor:
                 self.current_frame = cv2.addWeighted(abs_grad_x, 0.5, abs_grad_y, 0.5, 0)
                 self.show_frame()
                 
-        elif self.mode_var.get() == 'video':
+        elif self.mode_var.get() == 'video' or self.mode_var.get() == 'webcam':
             if self.cap is not None:
                 if self.processing_mode.get() == 'independent':
                     self.video_filters.clear()
@@ -804,7 +908,7 @@ class VideoImageProcessor:
                 self.current_frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
                 self.show_frame()
 
-        elif self.mode_var.get() == 'video':
+        elif self.mode_var.get() == 'video' or self.mode_var.get() == 'webcam':
             if self.cap is not None:
                 if self.processing_mode.get() == 'independent':
                     self.video_filters.clear()
@@ -822,7 +926,7 @@ class VideoImageProcessor:
                 self.current_frame = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
                 self.show_frame()
 
-        elif self.mode_var.get() == 'video':
+        elif self.mode_var.get() == 'video' or self.mode_var.get() == 'webcam':
             if self.cap is not None:
                 if self.processing_mode.get() == 'independent':
                     self.video_filters.clear()
@@ -838,7 +942,7 @@ class VideoImageProcessor:
                 self.current_frame = self.original_frame.copy()
                 self.show_frame()
 
-        elif self.mode_var.get() == 'video':
+        elif self.mode_var.get() == 'video' or self.mode_var.get() == 'webcam':
             if self.cap is not None:
                 self.video_filters.clear()
                 if self.is_paused:
