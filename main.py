@@ -8,6 +8,9 @@ import os
 from datetime import timedelta, datetime
 import pytz
 
+# Dependências
+# pip install opencv-python pillow numpy customtkinter pytz
+
 class VideoImageProcessor:
     def __init__(self, root: ctk.CTk):
         self.root = root
@@ -336,11 +339,13 @@ class VideoImageProcessor:
 
     # Funções de abertura da Webcam
     def open_webcam(self):
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
         self.cap = cv2.VideoCapture(0)
         if not self.cap.isOpened():
             print("Erro: Não foi possível acessar a webcam.")
             return
-        
         # Iniciar atualização do frame
         self.update_webcam_frame() 
 
@@ -412,7 +417,7 @@ class VideoImageProcessor:
                 else:
                     self.show_frame()
 
-    #Funções de controle da Webcam
+    # Funções de atualização do quadro exibido na reprodução da Webcam
     def update_webcam_frame(self):
         if self.cap is not None:
             if self.is_video_reverse:
@@ -612,7 +617,7 @@ class VideoImageProcessor:
 
             # Grava o arquivo do vídeo salvo
             time_now = datetime.now(pytz.timezone("America/Manaus"))
-            output_path = os.path.join(self.webcam_save_dir, f"segment_{time_now.strftime("%Y-%m-%d_%H-%M-%S")}.mp4")
+            output_path = os.path.join(self.webcam_save_dir, f"segment_{time_now.strftime('%Y-%m-%d_%H-%M-%S')}.mp4")
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             self.webcam_writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
