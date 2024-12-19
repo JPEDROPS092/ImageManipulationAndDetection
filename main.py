@@ -6,6 +6,7 @@ import numpy as np
 from PIL import Image, ImageTk
 import os
 from datetime import timedelta
+from ultralytics import YOLO
 
 class VideoImageProcessor:
     def __init__(self, root: ctk.CTk):
@@ -66,6 +67,9 @@ class VideoImageProcessor:
         
         # Controles de vídeo
         self.setup_video_controls()
+
+        # Inicializar variáveis
+        self.model = YOLO("yolov8n.pt")  # Carregar modelo YOLOv8 (troque por "yolov8s.pt" se preferir)
 
         # Bind eventos do mouse
         self.canvas.bind("<Button-1>", self.start_roi)
@@ -196,7 +200,13 @@ class VideoImageProcessor:
                                      width=70, height=20, fg_color="#585858", text_color="white", 
                                      font=("Trebuchet MS", 12, "bold"))
         button_color.grid(row=3, column=0, padx=5, pady=5)
-    
+        
+        button_color = ctk.CTkButton(filter_frame, text="Detectar Objetos", command=self.detect_objects, corner_radius=8, 
+                                     width=70, height=20, fg_color="#585858", text_color="white", 
+                                     font=("Trebuchet MS", 12, "bold"))
+        button_color.grid(row=3, column=0, padx=5, pady=5)
+
+
     # Método para configurar os controles de vídeo
     def setup_video_controls(self):
         # Criando o quadro de controles de vídeo
@@ -323,23 +333,23 @@ class VideoImageProcessor:
     def apply_filters_on_video(self):
         for filter in self.video_filters:
             if filter == 'blur':
-                self.current_frame = cv2.GaussianBlur(self.current_frame, (5,5), 0)
+                self.current_frame = cv2.GaussianBlur(self.current_frame, (5, 5), 0)
             
             if filter == 'sharpen':
-                kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
-                self.current_frame =  cv2.filter2D(self.current_frame, -1, kernel)
+                kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
+                self.current_frame = cv2.filter2D(self.current_frame, -1, kernel)
             
             if filter == 'emboss':
-                kernel = np.array([[-2,-1,0], [-1,1,1], [0,1,2]])
-                self.current_frame =  cv2.filter2D(self.current_frame, -1, kernel)
+                kernel = np.array([[-2, -1, 0], [-1, 1, 1], [0, 1, 2]])
+                self.current_frame = cv2.filter2D(self.current_frame, -1, kernel)
             
             if filter == 'laplacian':
-                self.current_frame =  cv2.Laplacian(self.current_frame, cv2.CV_64F).astype(np.uint8)
+                self.current_frame = cv2.Laplacian(self.current_frame, cv2.CV_64F).astype(np.uint8)
             
             if filter == 'canny':
                 self.current_frame = cv2.Canny(self.current_frame, 100, 200)
                 self.current_frame = cv2.cvtColor(self.current_frame, cv2.COLOR_GRAY2BGR)
-
+            
             if filter == 'sobel':
                 grad_x = cv2.Sobel(self.current_frame, cv2.CV_64F, 1, 0, ksize=3)
                 grad_y = cv2.Sobel(self.current_frame, cv2.CV_64F, 0, 1, ksize=3)
@@ -355,6 +365,13 @@ class VideoImageProcessor:
                 gray = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2GRAY)
                 _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
                 self.current_frame = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+            
+            if filter == 'Detectar Objetos':
+                # Realizar a detecção de objetos no frame atual usando YOLOv8
+                results = self.model(self.current_frame, conf=0.5)  # Ajuste o valor de confiança conforme necessário
+                self.current_frame = results[0].plot()  # Adicionar anotações ao frame
+
+                
     
     # Funções de atualização do quadro exibido na reprodução do vídeo
     def update_video_frame(self):
@@ -561,6 +578,33 @@ class VideoImageProcessor:
                 self.video_filters.clear()
                 if self.is_paused:
                     self.update_video_frame()
+
+    def detect_objects(self):
+        if self.mode_var.get() == 'image':  # Modo imagem
+            if self.current_frame is not None:
+                if self.processing_mode.get() == 'independent':
+                    self.current_frame = self.original_frame.copy()  # Restaurar o frame original
+                    
+                # Realizar detecção de objetos no frame atual
+                results = self.model(self.current_frame, conf=0.5)  # Ajustar confiança se necessário
+                annotated_frame = results[0].plot()  # Anotar o frame com os resultados
+                
+                self.current_frame = annotated_frame  # Atualizar o frame atual com as anotações
+                self.show_frame()  # Exibir o frame anotado
+
+        elif self.mode_var.get() == 'video':  # Modo vídeo
+            if self.cap is not None:
+                if self.processing_mode.get() == 'independent':
+                    self.video_filters.clear()  # Limpar filtros aplicados ao vídeo
+                
+                self.video_filters.append('detect_objects')  # Adicionar a detecção como um filtro
+                if self.is_paused:
+                    # Atualizar o frame pausado com a detecção
+                    if self.current_frame is not None:
+                        results = self.model(self.current_frame, conf=0.5)
+                        annotated_frame = results[0].plot()
+                        self.current_frame = annotated_frame
+                        self.update_video_frame()  # Atualizar exibição
 
     # ----------- Funções de ROI -------------
     def start_roi(self, event):
