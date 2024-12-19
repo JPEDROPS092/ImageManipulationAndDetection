@@ -7,7 +7,7 @@ from PIL import Image, ImageTk
 import os
 from datetime import timedelta, datetime
 import pytz
-
+from ultralytics import YOLO
 # Dependências
 # pip install opencv-python pillow numpy customtkinter pytz
 
@@ -78,6 +78,9 @@ class VideoImageProcessor:
         
         # Controles de vídeo
         self.setup_video_controls()
+
+        # Carregar modelo YOLOv8
+        self.model = YOLO("yolov8n.pt")   
 
         # Bind eventos do mouse
         self.canvas.bind("<Button-1>", self.start_roi)
@@ -212,6 +215,13 @@ class VideoImageProcessor:
                                      width=70, height=20, fg_color="#585858", text_color="white", 
                                      font=("Trebuchet MS", 12, "bold"))
         button_color.grid(row=3, column=0, padx=5, pady=5)
+
+        button_color = ctk.CTkButton(filter_frame, text="Detectar Objetos", command=self.detect_objects, corner_radius=8, 
+                                     width=70, height=20, fg_color="#585858", text_color="white", 
+                                     font=("Trebuchet MS", 12, "bold"))
+        button_color.grid(row=3, column=0, padx=5, pady=5)
+
+        
     
     # Método para configurar os controles de vídeo
     def setup_video_controls(self):
@@ -349,10 +359,34 @@ class VideoImageProcessor:
         # Iniciar atualização do frame
         self.update_webcam_frame() 
 
+    def detect_objects(self):
+        if self.mode_var.get() == 'image':  # Modo imagem
+            if self.current_frame is not None:
+                if self.processing_mode.get() == 'independent':
+                    self.current_frame = self.original_frame.copy()  # Restaurar o frame original
+                
+                # Realizar detecção de objetos no frame atual
+                results = self.model(self.current_frame, conf=0.5)  # Ajustar confiança conforme necessário
+                annotated_frame = results[0].plot()  # Anotar o frame com os resultados
+                
+                self.current_frame = annotated_frame  # Atualizar o frame atual com as anotações
+                self.show_frame()  # Exibir o frame anotado
+
+        elif self.mode_var.get() in ['video', 'webcam']:  # Modo vídeo ou webcam
+            if self.cap is not None:
+                self.video_filters.clear()  # Limpar filtros aplicados ao vídeo
+                self.video_filters.append('detect_objects')  # Adicionar a detecção como um filtro
+
     # Funções de aplicação de filtro em vídeo
     def apply_filters_on_video(self, frame):
         processed_frame = frame.copy()
         for filter in self.video_filters:
+            if filter == 'detect_objects':
+                # Realizar detecção de objetos (por exemplo, usando YOLO)
+                results = self.model(frame, conf=0.5)  # Ajuste a confiança conforme necessário
+                annotated_frame = results[0].plot()  # Marcar os objetos detectados
+                frame = annotated_frame  # Substituir o frame com as anotações
+                
             if filter == 'blur':
                 processed_frame = cv2.GaussianBlur(processed_frame, (5,5), 0)
             
@@ -387,11 +421,12 @@ class VideoImageProcessor:
                 _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
                 processed_frame = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
 
+
         return processed_frame
     
-    # Funções de atualização do quadro exibido na reprodução do vídeo
     def update_video_frame(self):
         if self.cap is not None and not self.is_paused:
+            # Controle de frames para vídeo reverso
             if self.is_video_reverse:
                 if self.video_current_frame > 0:
                     self.video_current_frame -= 1
@@ -399,23 +434,40 @@ class VideoImageProcessor:
             else:
                 if self.video_current_frame < self.cap.get(cv2.CAP_PROP_POS_FRAMES):
                     self.video_current_frame += 1
+
+            # Ler o próximo frame do vídeo
             ret, frame = self.cap.read()
             if ret:
                 self.original_frame = frame.copy()
-                self.current_frame = self.apply_filters_on_video(frame)
+
+                # Aplicar filtros no frame (incluindo a detecção de objetos)
+                self.current_frame = self.apply_filters_on_video(self.original_frame)
+                
+                # Se o zoom estiver ativado, aplicar o zoom no frame
                 if self.is_zoomed():
                     self.current_frame = self.apply_zoom_video(self.current_frame)
-                else:
-                    self.show_frame()
+
+                # Exibir o frame com a detecção
+                self.show_frame()
+
+            # Continuar chamando a função após o intervalo determinado pela velocidade do vídeo
             self.root.after(int(30 / self.video_speed), self.update_video_frame)
+
         elif self.is_paused:
+            # Se o vídeo estiver pausado, exibir o último frame (ou o frame original)
             if self.original_frame is not None:
                 self.current_frame = self.original_frame.copy()
+                # Aplicar filtros ao frame
                 self.current_frame = self.apply_filters_on_video(self.current_frame)
+                
+                # Se o zoom estiver ativado, aplicar o zoom no frame
                 if self.is_zoomed():
                     self.current_frame = self.apply_zoom_video(self.current_frame)
-                else:
-                    self.show_frame()
+                
+                # Exibir o frame
+                self.show_frame()
+
+
 
     # Funções de atualização do quadro exibido na reprodução da Webcam
     def update_webcam_frame(self):
@@ -444,32 +496,35 @@ class VideoImageProcessor:
         # Atualizar novamente após 10ms
         self.root.after(10, self.update_webcam_frame)
 
-    # Função de exibir o frame na tela
     def show_frame(self):
         if self.current_frame is not None:
-            # Converter BGR para RGB
+            # Converter de BGR para RGB para exibição no Tkinter
             frame_rgb = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2RGB)
-            
-            # Redimensionar mantendo proporção
+
+            # Redimensionar a imagem mantendo a proporção
             height, width = frame_rgb.shape[:2]
             canvas_width = self.canvas.winfo_width()
             canvas_height = self.canvas.winfo_height()
-            
-            self.ratio = max(width/canvas_width, height/canvas_height)
+
+            self.ratio = max(width / canvas_width, height / canvas_height)
             new_width = int(width / self.ratio)
             new_height = int(height / self.ratio)
 
             self.image_offset = ((canvas_width - new_width) / 2, (canvas_height - new_height) / 2)
-            
+
             frame_resized = cv2.resize(frame_rgb, (new_width, new_height))
-            
-            # Converter para PhotoImage
+
+            # Converter para PhotoImage (para exibição no Tkinter)
             self.photo = ImageTk.PhotoImage(image=Image.fromarray(frame_resized))
-            
-            # Mostrar na canvas
-            self.canvas.delete("all")
-            self.canvas.create_image(canvas_width//2, canvas_height//2, 
-                                   image=self.photo, anchor=tk.CENTER)
+
+            # Mostrar na Canvas
+            self.canvas.delete("all")  # Limpar a canvas antes de desenhar a nova imagem
+            self.canvas.create_image(canvas_width // 2, canvas_height // 2,
+                                    image=self.photo, anchor=tk.CENTER)
+
+            # Manter uma referência da imagem para evitar que ela seja coletada pelo garbage collector
+            self.canvas.image = self.photo
+
 
     # ----------- Funções de ROI -------------
     def start_roi(self, event):
@@ -555,8 +610,9 @@ class VideoImageProcessor:
                             self.update_video_frame()
                     if self.mode_var.get() == "image":
                         self.apply_zoom_image()
-                
-    
+
+
+                            
     # ------------- Funções de controle de vídeo --------------
     # Velocidade
     def speed_up(self):
@@ -953,6 +1009,35 @@ class VideoImageProcessor:
                 if self.is_paused:
                     self.update_video_frame()
     
+
+    def detect_objects(self):
+        if self.mode_var.get() == 'image':  # Modo imagem
+            if self.current_frame is not None:
+                if self.processing_mode.get() == 'independent':
+                    self.current_frame = self.original_frame.copy()  # Restaurar o frame original
+                    
+                # Realizar detecção de objetos no frame atual
+                results = self.model(self.current_frame, conf=0.5)  # Ajuste a confiança conforme necessário
+                annotated_frame = results[0].plot()  # Anotar o frame com os resultados
+                
+                self.current_frame = annotated_frame  # Atualizar o frame atual com as anotações
+                self.show_frame()  # Exibir o frame anotado
+
+        elif self.mode_var.get() == 'video':  # Modo vídeo
+            if self.cap is not None:
+                if self.processing_mode.get() == 'independent':
+                    self.video_filters.clear()  # Limpar filtros aplicados ao vídeo
+                
+                self.video_filters.append('detect_objects')  # Adicionar a detecção como um filtro
+                if self.is_paused:
+                    # Atualizar o frame pausado com a detecção
+                    if self.current_frame is not None:
+                        results = self.model(self.current_frame, conf=0.5)
+                        annotated_frame = results[0].plot()
+                        self.current_frame = annotated_frame
+                        self.update_video_frame()  # Atualizar exibição com o frame anotado
+
+
     # Controle de exclusão do objeto
     def __del__(self):
         if self.cap is not None:
