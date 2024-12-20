@@ -216,7 +216,7 @@ class VideoImageProcessor:
                                      font=("Trebuchet MS", 12, "bold"))
         button_color.grid(row=3, column=0, padx=5, pady=5)
 
-        button_detect = ctk.CTkButton(filter_frame, text="Detectar Objetos", command=self.detect_objects, corner_radius=8, 
+        button_detect = ctk.CTkButton(filter_frame, text="Detec/Obj", command=self.detect_objects, corner_radius=8, 
                                      width=70, height=20, fg_color="#585858", text_color="white", 
                                      font=("Trebuchet MS", 12, "bold"))
         button_detect.grid(row=3, column=3, padx=5, pady=5)
@@ -507,8 +507,8 @@ class VideoImageProcessor:
                 
                 if hasattr(self, 'is_zoomed') and self.is_zoomed():
                     self.current_frame = self.apply_zoom_video(self.current_frame)
-                    
-                self.show_frame()
+                else:
+                    self.show_frame()
                 
                 if hasattr(self, 'recording') and self.recording:
                     self.save_webcam_record()
@@ -526,16 +526,15 @@ class VideoImageProcessor:
             # Converter BGR para RGB
             frame_rgb = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2RGB)
             
-            # Obter dimensões do canvas e frame
+            # Redimensionar mantendo proporção
+            height, width = frame_rgb.shape[:2]
             canvas_width = self.canvas.winfo_width()
             canvas_height = self.canvas.winfo_height()
-            frame_height, frame_width = frame_rgb.shape[:2]
             
-            # Calcular proporção mantendo aspecto
-            self.ratio = min(canvas_width/frame_width, canvas_height/frame_height)
-            new_width = int(frame_width * self.ratio)
-            new_height = int(frame_height * self.ratio)
-            
+            self.ratio = max(width/canvas_width, height/canvas_height)
+            new_width = int(width / self.ratio)
+            new_height = int(height / self.ratio)
+
             # Redimensionar frame
             frame_resized = cv2.resize(frame_rgb, (new_width, new_height))
             
