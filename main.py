@@ -216,10 +216,10 @@ class VideoImageProcessor:
                                      font=("Trebuchet MS", 12, "bold"))
         button_color.grid(row=3, column=0, padx=5, pady=5)
 
-        button_color = ctk.CTkButton(filter_frame, text="Detectar Objetos", command=self.detect_objects, corner_radius=8, 
+        button_detect = ctk.CTkButton(filter_frame, text="Detectar Objetos", command=self.detect_objects, corner_radius=8, 
                                      width=70, height=20, fg_color="#585858", text_color="white", 
                                      font=("Trebuchet MS", 12, "bold"))
-        button_color.grid(row=3, column=0, padx=5, pady=5)
+        button_detect.grid(row=3, column=3, padx=5, pady=5)
 
         
     
@@ -307,7 +307,6 @@ class VideoImageProcessor:
         self.video_cutpoints = []
         self.canvas.delete("all")
     
-    # Funções de abertura de arquivo (geral)
     def open_file(self):
         if self.mode_var.get() == "image":
             filetypes = [("Image files", "*.png *.jpg *.jpeg *.bmp *.gif")]
@@ -319,14 +318,12 @@ class VideoImageProcessor:
         
         filename = filedialog.askopenfilename(filetypes=filetypes)
         if filename:
-            self.mode_changed()
             self.current_file = filename
             if self.mode_var.get() == "video":
                 self.open_video()
             else:
                 self.open_image()
-    
-    # Funções de abertura de imagem
+
     def open_image(self):
         try:
             self.current_frame = cv2.imread(self.current_file)
@@ -334,197 +331,230 @@ class VideoImageProcessor:
                 self.original_frame = self.current_frame.copy()
                 self.show_frame()
             else:
-                print("Erro: A imagem não foi carregada corretamente.")
-                # Trate o erro ou forneça um valor padrão
+                messagebox.showerror("Erro", "A imagem não foi carregada corretamente.")
                 self.original_frame = None
             
         except Exception as e:
-            print(f"Erro ao tentar carregar ou processar a imagem: {e}")
+            messagebox.showerror("Erro", f"Erro ao carregar ou processar a imagem: {e}")
             self.original_frame = None
-    
-    # Funções de abertura de vídeo
-    def open_video(self):
-        self.cap = cv2.VideoCapture(self.current_file)
-        self.update_video_frame()
 
-    # Funções de abertura da Webcam
-    def open_webcam(self):
-        if self.cap is not None:
+    def open_video(self):
+        # Liberar recurso de vídeo anterior se existir
+        if hasattr(self, 'cap') and self.cap is not None:
             self.cap.release()
-            self.cap = None
-        self.cap = cv2.VideoCapture(0)
-        if not self.cap.isOpened():
-            print("Erro: Não foi possível acessar a webcam.")
-            return
-        # Iniciar atualização do frame
-        self.update_webcam_frame() 
+            
+        try:
+            self.cap = cv2.VideoCapture(self.current_file)
+            if not self.cap.isOpened():
+                messagebox.showerror("Erro", "Não foi possível abrir o arquivo de vídeo.")
+                return
+
+            # Configurações iniciais do vídeo
+            self.is_paused = False
+            self.is_video_reverse = False
+            self.video_speed = 1.0
+            self.video_current_frame = 0
+            self.video_filters = []
+            
+            # Iniciar reprodução do vídeo
+            self.update_video_frame()
+            
+        except Exception as e:
+            messagebox.showerror("Erro", f"Erro ao abrir o vídeo: {e}")
+            if hasattr(self, 'cap') and self.cap is not None:
+                self.cap.release()
+
+    def open_webcam(self):
+        # Liberar recurso de webcam anterior se existir
+        if hasattr(self, 'cap') and self.cap is not None:
+            self.cap.release()
+
+        try:
+            self.cap = cv2.VideoCapture(0)
+            if not self.cap.isOpened():
+                messagebox.showerror("Erro", "Não foi possível acessar a webcam.")
+                return
+
+            # Configurações iniciais da webcam
+            self.recording = False
+            self.video_filters = []
+            
+            # Iniciar captura da webcam
+            self.update_webcam_frame()
+            
+        except Exception as e:
+            messagebox.showerror("Erro", f"Erro ao inicializar a webcam: {e}")
+            if hasattr(self, 'cap') and self.cap is not None:
+                self.cap.release()
 
     def detect_objects(self):
-        if self.mode_var.get() == 'image':  # Modo imagem
-            if self.current_frame is not None:
-                if self.processing_mode.get() == 'independent':
-                    self.current_frame = self.original_frame.copy()  # Restaurar o frame original
+        if not hasattr(self, 'model'):
+            messagebox.showerror("Erro", "Modelo de detecção não carregado.")
+            return
+            
+        if self.mode_var.get() == 'image':
+            if self.current_frame is None:
+                return
                 
-                # Realizar detecção de objetos no frame atual
-                results = self.model(self.current_frame, conf=0.5)  # Ajustar confiança conforme necessário
-                annotated_frame = results[0].plot()  # Anotar o frame com os resultados
-                
-                self.current_frame = annotated_frame  # Atualizar o frame atual com as anotações
-                self.show_frame()  # Exibir o frame anotado
-
-        elif self.mode_var.get() in ['video', 'webcam']:  # Modo vídeo ou webcam
-            if self.cap is not None:
-                self.video_filters.clear()  # Limpar filtros aplicados ao vídeo
-                self.video_filters.append('detect_objects')  # Adicionar a detecção como um filtro
-
-    # Funções de aplicação de filtro em vídeo
-    def apply_filters_on_video(self, frame):
-        processed_frame = frame.copy()
-        for filter in self.video_filters:
-            if filter == 'detect_objects':
-                # Realizar detecção de objetos (por exemplo, usando YOLO)
-                results = self.model(frame, conf=0.5)  # Ajuste a confiança conforme necessário
-                annotated_frame = results[0].plot()  # Marcar os objetos detectados
-                frame = annotated_frame  # Substituir o frame com as anotações
-                
-            if filter == 'blur':
-                processed_frame = cv2.GaussianBlur(processed_frame, (5,5), 0)
-            
-            if filter == 'sharpen':
-                kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
-                processed_frame =  cv2.filter2D(processed_frame, -1, kernel)
-            
-            if filter == 'emboss':
-                kernel = np.array([[-2,-1,0], [-1,1,1], [0,1,2]])
-                processed_frame =  cv2.filter2D(processed_frame, -1, kernel)
-            
-            if filter == 'laplacian':
-                processed_frame =  cv2.Laplacian(processed_frame, cv2.CV_64F).astype(np.uint8)
-            
-            if filter == 'canny':
-                processed_frame = cv2.Canny(processed_frame, 100, 200)
-                processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2BGR)
-
-            if filter == 'sobel':
-                grad_x = cv2.Sobel(processed_frame, cv2.CV_64F, 1, 0, ksize=3)
-                grad_y = cv2.Sobel(processed_frame, cv2.CV_64F, 0, 1, ksize=3)
-                abs_grad_x = cv2.convertScaleAbs(grad_x)
-                abs_grad_y = cv2.convertScaleAbs(grad_y)
-                processed_frame = cv2.addWeighted(abs_grad_x, 0.5, abs_grad_y, 0.5, 0)
-            
-            if filter == 'gray':
-                gray = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2GRAY)
-                processed_frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-            
-            if filter == 'binary':
-                gray = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2GRAY)
-                _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
-                processed_frame = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
-
-
-        return processed_frame
-    
-    def update_video_frame(self):
-        if self.cap is not None and not self.is_paused:
-            # Controle de frames para vídeo reverso
-            if self.is_video_reverse:
-                if self.video_current_frame > 0:
-                    self.video_current_frame -= 1
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.video_current_frame)
-            else:
-                if self.video_current_frame < self.cap.get(cv2.CAP_PROP_POS_FRAMES):
-                    self.video_current_frame += 1
-
-            # Ler o próximo frame do vídeo
-            ret, frame = self.cap.read()
-            if ret:
-                self.original_frame = frame.copy()
-
-                # Aplicar filtros no frame (incluindo a detecção de objetos)
-                self.current_frame = self.apply_filters_on_video(self.original_frame)
-                
-                # Se o zoom estiver ativado, aplicar o zoom no frame
-                if self.is_zoomed():
-                    self.current_frame = self.apply_zoom_video(self.current_frame)
-
-                # Exibir o frame com a detecção
-                self.show_frame()
-
-            # Continuar chamando a função após o intervalo determinado pela velocidade do vídeo
-            self.root.after(int(30 / self.video_speed), self.update_video_frame)
-
-        elif self.is_paused:
-            # Se o vídeo estiver pausado, exibir o último frame (ou o frame original)
-            if self.original_frame is not None:
+            if self.processing_mode.get() == 'independent':
                 self.current_frame = self.original_frame.copy()
-                # Aplicar filtros ao frame
-                self.current_frame = self.apply_filters_on_video(self.current_frame)
-                
-                # Se o zoom estiver ativado, aplicar o zoom no frame
-                if self.is_zoomed():
-                    self.current_frame = self.apply_zoom_video(self.current_frame)
-                
-                # Exibir o frame
+            
+            try:
+                results = self.model(self.current_frame, conf=0.5)
+                self.current_frame = results[0].plot()
                 self.show_frame()
+            except Exception as e:
+                messagebox.showerror("Erro", f"Erro na detecção: {e}")
+                
+        elif self.mode_var.get() in ['video', 'webcam']:
+            if 'detect_objects' not in self.video_filters:
+                self.video_filters.append('detect_objects')
 
+    def apply_filters_on_video(self, frame):
+        if frame is None:
+            return None
+        
+        processed_frame = frame.copy()
+        
+        try:
+            for filter_name in self.video_filters:
+                if filter_name == 'detect_objects':
+                    results = self.model(processed_frame, conf=0.5)
+                    processed_frame = results[0].plot()
+                
+                elif filter_name == 'blur':
+                    processed_frame = cv2.GaussianBlur(processed_frame, (5,5), 0)
+                
+                elif filter_name == 'sharpen':
+                    kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+                    processed_frame = cv2.filter2D(processed_frame, -1, kernel)
+                
+                elif filter_name == 'emboss':
+                    kernel = np.array([[-2,-1,0], [-1,1,1], [0,1,2]])
+                    processed_frame = cv2.filter2D(processed_frame, -1, kernel)
+                
+                elif filter_name == 'laplacian':
+                    processed_frame = cv2.Laplacian(processed_frame, cv2.CV_64F).astype(np.uint8)
+                
+                elif filter_name == 'canny':
+                    processed_frame = cv2.Canny(processed_frame, 100, 200)
+                    processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2BGR)
+                
+                elif filter_name == 'sobel':
+                    grad_x = cv2.Sobel(processed_frame, cv2.CV_64F, 1, 0, ksize=3)
+                    grad_y = cv2.Sobel(processed_frame, cv2.CV_64F, 0, 1, ksize=3)
+                    abs_grad_x = cv2.convertScaleAbs(grad_x)
+                    abs_grad_y = cv2.convertScaleAbs(grad_y)
+                    processed_frame = cv2.addWeighted(abs_grad_x, 0.5, abs_grad_y, 0.5, 0)
+                
+                elif filter_name == 'gray':
+                    processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2GRAY)
+                    processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2BGR)
+                
+                elif filter_name == 'binary':
+                    gray = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2GRAY)
+                    _, processed_frame = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+                    processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2BGR)
+                    
+        except Exception as e:
+            print(f"Erro ao aplicar filtro {filter_name}: {e}")
+            return frame
+            
+        return processed_frame
 
-
-    # Funções de atualização do quadro exibido na reprodução da Webcam
-    def update_webcam_frame(self):
-        if self.cap is not None:
-            if self.is_video_reverse:
-                if self.video_current_frame > 0:
-                    self.video_current_frame -= 1
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.video_current_frame)
-            else:
-                if self.video_current_frame < self.cap.get(cv2.CAP_PROP_POS_FRAMES):
+    def update_video_frame(self):
+        if not hasattr(self, 'cap') or self.cap is None:
+            return
+            
+        if not self.is_paused:
+            try:
+                if self.is_video_reverse:
+                    if self.video_current_frame > 0:
+                        self.video_current_frame -= 1
+                        self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.video_current_frame)
+                
+                ret, frame = self.cap.read()
+                if ret:
+                    self.original_frame = frame.copy()
+                    self.current_frame = self.apply_filters_on_video(self.original_frame)
+                    
+                    if hasattr(self, 'is_zoomed') and self.is_zoomed():
+                        self.current_frame = self.apply_zoom_video(self.current_frame)
+                    
+                    self.show_frame()
                     self.video_current_frame += 1
+                else:
+                    # Reiniciar o vídeo quando chegar ao fim
+                    self.video_current_frame = 0
+                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    
+            except Exception as e:
+                print(f"Erro ao atualizar frame do vídeo: {e}")
+        
+        # Calcular delay baseado na velocidade
+        delay = int(30 / self.video_speed) if hasattr(self, 'video_speed') else 30
+        self.root.after(delay, self.update_video_frame)
+
+    def update_webcam_frame(self):
+        if not hasattr(self, 'cap') or self.cap is None:
+            return
+            
+        try:
             ret, frame = self.cap.read()
             if ret and frame is not None:
                 self.original_frame = frame.copy()
                 self.current_frame = self.apply_filters_on_video(frame)
-                if self.is_zoomed():
+                
+                if hasattr(self, 'is_zoomed') and self.is_zoomed():
                     self.current_frame = self.apply_zoom_video(self.current_frame)
-                else:
-                    self.show_frame()
-                if self.recording == True:
+                    
+                self.show_frame()
+                
+                if hasattr(self, 'recording') and self.recording:
                     self.save_webcam_record()
                     
-            else:
-                print("Erro ao capturar o frame da webcam.")
-
-        # Atualizar novamente após 10ms
+        except Exception as e:
+            print(f"Erro ao capturar frame da webcam: {e}")
+        
         self.root.after(10, self.update_webcam_frame)
 
     def show_frame(self):
-        if self.current_frame is not None:
-            # Converter de BGR para RGB para exibição no Tkinter
+        if self.current_frame is None:
+            return
+            
+        try:
+            # Converter BGR para RGB
             frame_rgb = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2RGB)
-
-            # Redimensionar a imagem mantendo a proporção
-            height, width = frame_rgb.shape[:2]
+            
+            # Obter dimensões do canvas e frame
             canvas_width = self.canvas.winfo_width()
             canvas_height = self.canvas.winfo_height()
-
-            self.ratio = max(width / canvas_width, height / canvas_height)
-            new_width = int(width / self.ratio)
-            new_height = int(height / self.ratio)
-
-            self.image_offset = ((canvas_width - new_width) / 2, (canvas_height - new_height) / 2)
-
+            frame_height, frame_width = frame_rgb.shape[:2]
+            
+            # Calcular proporção mantendo aspecto
+            self.ratio = min(canvas_width/frame_width, canvas_height/frame_height)
+            new_width = int(frame_width * self.ratio)
+            new_height = int(frame_height * self.ratio)
+            
+            # Redimensionar frame
             frame_resized = cv2.resize(frame_rgb, (new_width, new_height))
-
-            # Converter para PhotoImage (para exibição no Tkinter)
+            
+            # Converter para PhotoImage
             self.photo = ImageTk.PhotoImage(image=Image.fromarray(frame_resized))
-
-            # Mostrar na Canvas
-            self.canvas.delete("all")  # Limpar a canvas antes de desenhar a nova imagem
-            self.canvas.create_image(canvas_width // 2, canvas_height // 2,
-                                    image=self.photo, anchor=tk.CENTER)
-
-            # Manter uma referência da imagem para evitar que ela seja coletada pelo garbage collector
+            
+            # Calcular posição central
+            x_center = canvas_width // 2
+            y_center = canvas_height // 2
+            
+            # Atualizar canvas
+            self.canvas.delete("all")
+            self.canvas.create_image(x_center, y_center, image=self.photo, anchor=tk.CENTER)
+            
+            # Manter referência
             self.canvas.image = self.photo
-
+            
+        except Exception as e:
+            print(f"Erro ao exibir frame: {e}")
 
     # ----------- Funções de ROI -------------
     def start_roi(self, event):
